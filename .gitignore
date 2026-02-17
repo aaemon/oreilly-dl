@@ -1,0 +1,33 @@
+# User credentials
+cookie.txt
+cookies.txt
+
+# Downloaded Content
+*.mp4
+*.mkv
+*.webm
+*.part
+*.ytdl
+*.html
+!0*_chapter.html  # Don't ignore chapter files if we want to track examples (but usually we ignore downloads)
+# Actually, ignore all subdirectories that look like downloads?
+# Better to ignore generic patterns or specific folders if possible.
+# For now, let's ignore common video/book formats if they are in root, 
+# but mostly we want to ignore the directories created.
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Distribution / Build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDEs
+.vscode/
+.idea/

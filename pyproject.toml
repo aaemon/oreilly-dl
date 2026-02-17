@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oreilly-dl"
+version = "0.1.0"
+description = "O'Reilly Course and Book Downloader"
+dependencies = [
+    "yt-dlp",
+    "requests",
+    "beautifulsoup4",
+    "inquirer",
+    "tqdm"
+]
+scripts = { "oreilly-dl" = "oreilly_dl:main", "oreilly-books-dl" = "oreilly_books_dl:main" }
+
+[tool.setuptools]
+py-modules = ["oreilly_dl", "oreilly_books_dl", "utils"]
