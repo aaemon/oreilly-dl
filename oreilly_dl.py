@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import sys
+import os
+import re
 import subprocess
 import inquirer
 import requests
@@ -33,14 +35,6 @@ def main():
     except Exception as e:
         print(f"Auth check skipped: {e}")
 
-    while True:
-        course_url = input("\nEnter Course URL (or 'q' to quit): ").strip()
-        if course_url.lower() == 'q':
-            break
-        
-        if not course_url:
-            continue
-            
     # Ensure Downloads directory exists
     base_download_dir = os.path.join(os.getcwd(), "Downloads")
     if not os.path.exists(base_download_dir):
@@ -57,11 +51,10 @@ def main():
         print(f"\nProcessing: {course_url}")
         
         # 1. Extract ISBN
-        import re
-        isbn_match = re.search(r'/(?:course|videos|library/view|book)/[^/]+/([^/]+)/', course_url)
+        isbn_match = re.search(r'/(?:course|videos|library/view|book)/[^/]+/([^/]+)/?', course_url)
         if not isbn_match:
             print("Could not detect ISBN from URL. Using fallback yt-dlp mode (metadata might be incomplete).")
-             # Fallback to old behavior if ISBN not found (simple pass-through)
+            # Fallback to old behavior if ISBN not found (simple pass-through)
             output_template = f"{base_download_dir}/%(playlist)s/%(chapter_number)s - %(chapter)s/%(playlist_index)s - %(title)s.%(ext)s"
             cmd = ["yt-dlp", "--cookies", cookie_file, "-o", output_template, "--format", "bestvideo+bestaudio/best", "--merge-output-format", "mp4", "--embed-metadata", course_url]
             try:
@@ -85,7 +78,7 @@ def main():
                 course_title = resp.json().get('title', course_title)
             
             # Sanitize course title
-            course_title = re.sub(r'[\\/*?:"<>|]', "", course_title).strip()
+            course_title = re.sub(r'[\\/*?"<>|]', "", course_title).strip()
             print(f"Course Title: {course_title}")
             
             # Get TOC
@@ -93,7 +86,12 @@ def main():
             resp = session.get(toc_url)
             if resp.status_code != 200:
                 print(f"Failed to fetch TOC. Status: {resp.status_code}. Falling back to default yt-dlp.")
-                # Fallback code...
+                output_template = f"{base_download_dir}/%(playlist)s/%(chapter_number)s - %(chapter)s/%(playlist_index)s - %(title)s.%(ext)s"
+                cmd = ["yt-dlp", "--cookies", cookie_file, "-o", output_template, "--format", "bestvideo+bestaudio/best", "--merge-output-format", "mp4", "--embed-metadata", course_url]
+                try:
+                    subprocess.run(cmd, check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"Error: {e}")
                 continue
                 
             toc = resp.json()
@@ -106,18 +104,15 @@ def main():
             
             for module in toc:
                 module_label = module.get('label', f"Module {module_idx}")
-                module_label = re.sub(r'[\\/*?:"<>|]', "", module_label).strip()
+                module_label = re.sub(r'[\\/*?"<>|]', "", module_label).strip()
                 module_dir_name = f"{module_idx:02d} - {module_label}"
                 
                 # Check for children (lessons)
                 children = module.get('children', [])
                 if not children:
-                    # deeply nested? or maybe this node IS a lesson if it has no children but has a 'url'?
-                    # In O'Reilly TOC, top level without children might be intro/outro.
-                    # Or 'flat' course.
-                    # If it has a URL and no children, treat as lesson in root module?
+                    # If it has a URL and no children, treat as lesson in root module
                     if module.get('url'):
-                        children = [module] # Treat itself as single child
+                        children = [module]  # Treat itself as single child
                         module_dir_name = "00 - Introduction_or_Misc"
 
                 if not children:
@@ -128,15 +123,14 @@ def main():
                 lesson_idx = 1
                 for lesson in children:
                     lesson_label = lesson.get('label', f"Lesson {lesson_idx}")
-                    lesson_label = re.sub(r'[\\/*?:"<>|]', "", lesson_label).strip()
+                    lesson_label = re.sub(r'[\\/*?"<>|]', "", lesson_label).strip()
                     lesson_filename = f"{lesson_idx:02d} - {lesson_label}.mp4"
                     
                     lesson_url = lesson.get('url')
                     if not lesson_url:
                         continue
                         
-                    # Output path
-                    # Downloads/Course Title/Module/Lesson.mp4
+                    # Output path: Downloads/Course Title/Module/Lesson.mp4
                     output_path = os.path.join(base_download_dir, course_title, module_dir_name, lesson_filename)
                     
                     # Create directory if needed
@@ -169,7 +163,7 @@ def main():
                         print(f"Failed to download: {lesson_label}")
                     except KeyboardInterrupt:
                         print("\nInterrupted by user. Exiting.")
-                        return # Exit main loop and function
+                        return  # Exit main loop and function
 
                     lesson_idx += 1
                 
