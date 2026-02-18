@@ -41,55 +41,146 @@ def main():
         if not course_url:
             continue
             
-        # Optimization: yt-dlp works best with the API URL for O'Reilly courses.
-        # Browser URL: https://learning.oreilly.com/course/title/isbn/
-        # Target URL: https://learning.oreilly.com/api/v1/book/isbn/
-        
-        import re
-        isbn_match = re.search(r'/(?:course|videos|library/view)/[^/]+/([^/]+)/', course_url)
-        if isbn_match:
-            isbn = isbn_match.group(1)
-            print(f"Detected ISBN: {isbn}")
-            # Use the API URL which yt-dlp's safari:course extractor definitely supports
-            download_url = f"https://learning.oreilly.com/api/v1/book/{isbn}/"
-            print(f"Converted to API URL for downloader: {download_url}")
-        else:
-            # Fallback to whatever user provided
-            download_url = course_url
+    # Ensure Downloads directory exists
+    base_download_dir = os.path.join(os.getcwd(), "Downloads")
+    if not os.path.exists(base_download_dir):
+        os.makedirs(base_download_dir)
 
-        print(f"\nProcessing: {download_url}")
+    while True:
+        course_url = input("\nEnter Course URL (or 'q' to quit): ").strip()
+        if course_url.lower() == 'q':
+            break
         
-        # Construct yt-dlp command
-        # Output template: Course Title / Chapter Number - Chapter Title / Index - Title.ext
-        # We use %(playlist)s for Course Title (usually works for O'Reilly)
-        # %(chapter_number)s and %(chapter)s for Module
-        # %(title)s for Lesson
+        if not course_url:
+            continue
+            
+        print(f"\nProcessing: {course_url}")
         
-        # Note: If chapter info is missing, yt-dlp might put it in NA directories.
-        # We can use autonumber if needed, but let's try the requested structure.
+        # 1. Extract ISBN
+        import re
+        isbn_match = re.search(r'/(?:course|videos|library/view|book)/[^/]+/([^/]+)/', course_url)
+        if not isbn_match:
+            print("Could not detect ISBN from URL. Using fallback yt-dlp mode (metadata might be incomplete).")
+             # Fallback to old behavior if ISBN not found (simple pass-through)
+            output_template = f"{base_download_dir}/%(playlist)s/%(chapter_number)s - %(chapter)s/%(playlist_index)s - %(title)s.%(ext)s"
+            cmd = ["yt-dlp", "--cookies", cookie_file, "-o", output_template, "--format", "bestvideo+bestaudio/best", "--merge-output-format", "mp4", "--embed-metadata", course_url]
+            try:
+                subprocess.run(cmd, check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"Error: {e}")
+            continue
+
+        isbn = isbn_match.group(1)
+        print(f"Detected ISBN: {isbn}")
         
-        output_template = "%(playlist)s/%(chapter_number)02d - %(chapter)s/%(playlist_index)s - %(title)s.%(ext)s"
-        
-        cmd = [
-            "yt-dlp",
-            "--cookies", cookie_file,
-            "-o", output_template,
-            "--format", "bestvideo+bestaudio/best",
-            "--merge-output-format", "mp4",
-            "--embed-metadata", # Useful to keep metadata
-            download_url
-        ]
+        # 2. Fetch Course TOC to get structure
+        api_url = f"https://learning.oreilly.com/api/v1/book/{isbn}/"
+        toc_url = f"https://learning.oreilly.com/api/v1/book/{isbn}/toc/"
         
         try:
-            print("Starting download... (Press Ctrl+C to cancel current course)")
-            subprocess.run(cmd, check=True)
-            print(f"Successfully finished: {course_url}")
-        except subprocess.CalledProcessError as e:
-            print(f"Download interrupted or failed: {e}")
-        except KeyboardInterrupt:
-            print("\nDownload canceled by user.")
-        except FileNotFoundError:
-            print("Error: yt-dlp not found. Please install it (pip install yt-dlp).")
+            # Get Title first
+            resp = session.get(api_url)
+            course_title = "Unknown Course"
+            if resp.status_code == 200:
+                course_title = resp.json().get('title', course_title)
+            
+            # Sanitize course title
+            course_title = re.sub(r'[\\/*?:"<>|]', "", course_title).strip()
+            print(f"Course Title: {course_title}")
+            
+            # Get TOC
+            print("Fetching Course TOC...")
+            resp = session.get(toc_url)
+            if resp.status_code != 200:
+                print(f"Failed to fetch TOC. Status: {resp.status_code}. Falling back to default yt-dlp.")
+                # Fallback code...
+                continue
+                
+            toc = resp.json()
+            
+            # 3. Iterate and Download
+            # Structure: List of objects. Objects have 'label' and 'children'.
+            
+            module_idx = 1
+            total_modules = len(toc)
+            
+            for module in toc:
+                module_label = module.get('label', f"Module {module_idx}")
+                module_label = re.sub(r'[\\/*?:"<>|]', "", module_label).strip()
+                module_dir_name = f"{module_idx:02d} - {module_label}"
+                
+                # Check for children (lessons)
+                children = module.get('children', [])
+                if not children:
+                    # deeply nested? or maybe this node IS a lesson if it has no children but has a 'url'?
+                    # In O'Reilly TOC, top level without children might be intro/outro.
+                    # Or 'flat' course.
+                    # If it has a URL and no children, treat as lesson in root module?
+                    if module.get('url'):
+                        children = [module] # Treat itself as single child
+                        module_dir_name = "00 - Introduction_or_Misc"
+
+                if not children:
+                    continue
+
+                print(f"\n--- Module {module_idx}/{total_modules}: {module_label} ---")
+                
+                lesson_idx = 1
+                for lesson in children:
+                    lesson_label = lesson.get('label', f"Lesson {lesson_idx}")
+                    lesson_label = re.sub(r'[\\/*?:"<>|]', "", lesson_label).strip()
+                    lesson_filename = f"{lesson_idx:02d} - {lesson_label}.mp4"
+                    
+                    lesson_url = lesson.get('url')
+                    if not lesson_url:
+                        continue
+                        
+                    # Output path
+                    # Downloads/Course Title/Module/Lesson.mp4
+                    output_path = os.path.join(base_download_dir, course_title, module_dir_name, lesson_filename)
+                    
+                    # Create directory if needed
+                    output_dir = os.path.dirname(output_path)
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+                    
+                    # Check if file exists (simple resume)
+                    if os.path.exists(output_path):
+                        print(f"Skipping (exists): {lesson_filename}")
+                        lesson_idx += 1
+                        continue
+
+                    print(f"Downloading: {lesson_filename}")
+                    
+                    # Call yt-dlp for this specific VIDEO URL
+                    cmd = [
+                        "yt-dlp",
+                        "--cookies", cookie_file,
+                        "-o", output_path,
+                        "--format", "bestvideo+bestaudio/best",
+                        "--merge-output-format", "mp4",
+                        "--embed-metadata",
+                        lesson_url
+                    ]
+                    
+                    try:
+                        subprocess.run(cmd, check=True)
+                    except subprocess.CalledProcessError:
+                        print(f"Failed to download: {lesson_label}")
+                    except KeyboardInterrupt:
+                        print("\nInterrupted by user. Exiting.")
+                        return # Exit main loop and function
+
+                    lesson_idx += 1
+                
+                module_idx += 1
+                
+            print(f"\nCourse '{course_title}' download complete!")
+            
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     main()

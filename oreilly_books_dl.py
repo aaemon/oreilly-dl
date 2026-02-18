@@ -177,7 +177,11 @@ def main():
         print("Invalid URL.")
         sys.exit(1)
         
-    download_book(session, book_url, ".")
+    base_dir = os.path.join(os.getcwd(), "Downloads")
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir)
+        
+    download_book(session, book_url, base_dir)
 
 if __name__ == "__main__":
     main()
